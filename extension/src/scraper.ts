@@ -212,19 +212,38 @@ export const scrapePage = () => {
     }
 
     // Final Fallback for Title if still empty (Common for all platforms)
+    // Final Fallback for Title/Company if still empty (Common for all platforms)
     if (!jobData.title) {
         // Try document title
         const docTitle = document.title
         if (docTitle) {
-            // Heuristic: "Job Title at Company" or "Job Title | Company"
-            const splitters = ["|", " at ", "-", "–"]
+            // Heuristic: "Job Title at Company" or "Job Title | Company" or "Job Title - Company"
+            // Most sites follow: Title | Company | Location OR Title - Company - Location
+            const splitters = [" | ", " at ", " - ", " – "]
+
             for (const s of splitters) {
                 if (docTitle.includes(s)) {
-                    jobData.title = docTitle.split(s)[0].trim()
+                    const parts = docTitle.split(s)
+                    jobData.title = parts[0].trim()
+
+                    // If we haven't found a company yet, try the second part
+                    if (!jobData.company && parts.length > 1) {
+                        // Often the second part is the company
+                        // But sometimes it might be "Job Title - Location - Company"
+                        // We'll take the second part as a best guess for company if it's not "LinkedIn" etc.
+                        const candidate = parts[1].trim()
+                        const ignored = ["LinkedIn", "Indeed", "Naukri", "Job", "Work"]
+                        if (!ignored.some(i => candidate.includes(i))) {
+                            jobData.company = candidate
+                            log(`Found company from doc.title split by '${s}'`)
+                        }
+                    }
+
                     log(`Found title from doc.title split by '${s}'`)
                     break
                 }
             }
+
             if (!jobData.title) {
                 jobData.title = docTitle
                 log("Used full doc.title as fallback")
