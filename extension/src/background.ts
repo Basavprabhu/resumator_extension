@@ -34,3 +34,45 @@ function checkUrlAndSetBadge(tabId: number, url: string) {
         chrome.action.setBadgeText({ text: "", tabId })
     }
 }
+
+// Proxy API Requests to avoid CSP issues
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request.action === "GENERATE_RESUME") {
+        fetch("http://localhost:8000/api/generate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(request.payload)
+        })
+            .then(async (res) => {
+                if (!res.ok) throw new Error("Backend error: " + res.statusText)
+                const blob = await res.blob()
+                // We can't send blob directly, so we send it as base64 or data url
+                const reader = new FileReader()
+                reader.readAsDataURL(blob)
+                reader.onloadend = () => {
+                    sendResponse({ success: true, dataUrl: reader.result, filename: request.filename })
+                }
+            })
+            .catch((err) => {
+                sendResponse({ success: false, error: err.message })
+            })
+        return true // Keep channel open
+    }
+
+    if (request.action === "MATCH_SCORE") {
+        fetch("http://localhost:8000/api/match", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(request.payload)
+        })
+            .then(async (res) => {
+                if (!res.ok) throw new Error("Backend error: " + res.statusText)
+                const data = await res.json()
+                sendResponse({ success: true, data })
+            })
+            .catch((err) => {
+                sendResponse({ success: false, error: err.message })
+            })
+        return true // Keep channel open
+    }
+})

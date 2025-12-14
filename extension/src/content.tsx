@@ -1,9 +1,14 @@
 // @ts-ignore
 import cssText from "data-text:./style.css"
 import type { PlasmoCSConfig } from "plasmo"
-import { useEffect, useState, useRef } from "react"
+import React, { useEffect, useState } from "react"
 import { createRoot } from "react-dom/client"
 import { scrapePage } from "./scraper"
+import Toast from "./components/ui/Toast"
+import DebugOverlay, { type DebugLog } from "./components/DebugOverlay"
+import InlineMatchButton from "./components/InlineMatchButton"
+import FloatingGenerateButton from "./components/FloatingGenerateButton"
+import ResumeModal from "./components/ResumeModal"
 
 export const config: PlasmoCSConfig = {
     matches: ["https://www.linkedin.com/*", "https://in.indeed.com/*", "https://www.indeed.com/*", "https://www.naukri.com/*"]
@@ -15,84 +20,18 @@ export const getStyle = () => {
     return style
 }
 
-// --- Debug Helper ---
-const DEBUG = false // Toggle this to false when done
-
-type DebugLog = { ts: string, msg: string }
-
-// --- Components ---
-
-const DebugOverlay = ({ logs, jobData, status }: { logs: DebugLog[], jobData: any, status: string }) => {
-    if (!DEBUG) return null
-    return (
-        <div style={{
-            position: 'fixed',
-            bottom: '10px',
-            left: '10px',
-            zIndex: 999999,
-            backgroundColor: 'rgba(0,0,0,0.85)',
-            color: '#0f0',
-            fontFamily: 'monospace',
-            fontSize: '11px',
-            padding: '10px',
-            borderRadius: '8px',
-            maxWidth: '300px',
-            maxHeight: '400px',
-            overflowY: 'auto',
-            pointerEvents: 'none', // Click through
-            border: '1px solid #0f0'
-        }}>
-            <h3 style={{ margin: '0 0 5px 0', borderBottom: '1px solid #555' }}>Resumator Debugger</h3>
-            <div style={{ marginBottom: '5px' }}>
-                <strong>Status:</strong> {status}<br />
-                <strong>Platform:</strong> {jobData?.platform || 'Unknown'}<br />
-                <strong>Title:</strong> {jobData?.title || 'None'}<br />
-                <strong>Desc Len:</strong> {jobData?.description?.length || 0} chars
-            </div>
-            <div style={{ borderTop: '1px dashed #555', paddingTop: '5px' }}>
-                {logs.slice(-10).map((l, i) => (
-                    <div key={i}>[{l.ts}] {l.msg}</div>
-                ))}
-            </div>
-        </div>
-    )
+// --- Global Error Suppression ---
+if (typeof window !== "undefined") {
+    window.addEventListener("error", (event) => {
+        if (event.message?.includes("Extension context invalidated")) {
+            event.preventDefault()
+            event.stopImmediatePropagation()
+            return true
+        }
+    }, true)
 }
 
-const InlineButton = ({ onClick }: { onClick: () => void }) => (
-    <button
-        onClick={(e) => {
-            e.preventDefault()
-            e.stopPropagation()
-            onClick()
-        }}
-        className="resumator-inline-btn"
-        style={{
-            zIndex: 9999,
-            display: 'inline-flex',
-            alignItems: 'center',
-            height: 'fit-content',
-            background: 'linear-gradient(135deg, #4f46e5 0%, #3b82f6 100%)',
-            color: 'white',
-            fontWeight: 'bold',
-            borderRadius: '24px',
-            padding: '8px 20px',
-            marginLeft: '12px',
-            border: '1px solid rgba(255, 255, 255, 0.2)',
-            cursor: 'pointer',
-            boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
-            fontSize: '14px',
-            fontFamily: 'sans-serif',
-            transition: 'all 0.2s ease',
-        }}
-        onMouseOver={(e) => e.currentTarget.style.transform = 'translateY(-1px)'}
-        onMouseOut={(e) => e.currentTarget.style.transform = 'translateY(0)'}
-    >
-        <span style={{ marginRight: '8px', fontSize: '18px' }}>✨</span>
-        <span>Generate Resume</span>
-    </button>
-)
-
-const ResumeOverlay = () => {
+const ResumatorApp = () => {
     const [isOpen, setIsOpen] = useState(false)
     const [jobData, setJobData] = useState<any>(null)
     const [userData, setUserData] = useState({
@@ -102,6 +41,8 @@ const ResumeOverlay = () => {
         experience: ""
     })
     const [loading, setLoading] = useState(false)
+    const [matchResult, setMatchResult] = useState<{ score: number, reasoning: string } | null>(null)
+    const [toast, setToast] = useState<{ msg: string, type: 'error' | 'success' | 'info' } | null>(null)
     const [genStatus, setGenStatus] = useState("")
 
     // Debug State
@@ -114,8 +55,28 @@ const ResumeOverlay = () => {
         setDebugLogs(prev => [...prev, { ts, msg }])
     }
 
+    const showToast = (msg: string, type: 'error' | 'success' | 'info' = 'info') => {
+        setToast({ msg, type })
+    }
+
+    const isContextValid = () => {
+        try {
+            return !!chrome.runtime?.id
+        } catch (e) {
+            return false
+        }
+    }
+
+    // --- Actions ---
+
     const handleGenerate = async () => {
         if (!jobData) return
+
+        if (!isContextValid()) {
+            showToast("Extension context invalidated. Please refresh.", "error")
+            return
+        }
+
         setLoading(true)
         setGenStatus("Generating...")
         try {
@@ -127,108 +88,186 @@ const ResumeOverlay = () => {
                 job_description: jobData.description
             }
 
-            const res = await fetch("http://localhost:8000/api/generate", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload)
+            const filename = `Resume_${jobData.title.replace(/[^a-z0-9]/gi, '_')}.pdf`
+
+            const response = await chrome.runtime.sendMessage({
+                action: "GENERATE_RESUME",
+                payload,
+                filename
             })
 
-            if (!res.ok) throw new Error("Backend error")
+            if (!response.success) throw new Error(response.error || "Generation failed")
 
-            const blob = await res.blob()
-            const url = window.URL.createObjectURL(blob)
-            const a = document.createElement("a")
-            a.href = url
-            a.download = `Resume_${jobData.title.replace(/[^a-z0-9]/gi, '_')}.pdf`
-            document.body.appendChild(a)
-            a.click()
-            document.body.removeChild(a)
+            // Download
+            const link = document.createElement("a")
+            link.href = response.dataUrl
+            link.download = response.filename
+            document.body.appendChild(link)
+            link.click()
+            document.body.removeChild(link)
 
+            showToast("Resume generated & downloaded!", "success")
             setGenStatus("Done! PDF Downloaded.")
         } catch (e: any) {
-            setGenStatus("Error: " + e.message)
+            if (e.message.includes("Extension context invalidated")) {
+                showToast("Please refresh the page.", "error")
+            } else {
+                showToast(e.message, "error")
+                setGenStatus("Error: " + e.message)
+            }
         } finally {
             setLoading(false)
         }
     }
 
-    // Injection & Scraping Logic
+    const handleMatchScore = async () => {
+        if (!jobData) return
+        if (!isContextValid()) {
+            showToast("Extension context invalidated. Please refresh.", "error")
+            return
+        }
+
+        setLoading(true)
+        setMatchResult(null)
+        try {
+            const payload = {
+                user_data: {
+                    ...userData,
+                    skills: userData.skills.split(",").map((s: string) => s.trim())
+                },
+                job_description: jobData.description
+            }
+
+            const response = await chrome.runtime.sendMessage({
+                action: "MATCH_SCORE",
+                payload
+            })
+
+            if (!response.success) throw new Error(response.error || "Matching failed")
+
+            setMatchResult(response.data)
+            showToast("Match analysis complete!", "success")
+        } catch (e: any) {
+            showToast(e.message, "error")
+        } finally {
+            setLoading(false)
+        }
+    }
+
+    // --- Injection Logic ---
     useEffect(() => {
         let mounted = true
-        addLog("Mounting Content Script...")
+        addLog("Mounting Content Script with Unified Controller...")
 
-        const scanner = () => {
+        const scanAndInject = () => {
             if (!mounted) return
 
-            // 1. Scrape Job Data
+            if (!isContextValid()) {
+                console.warn("[Resumator] Context invalidated. Cleaning up...")
+                const existing = document.getElementById("resumator-inline-container")
+                if (existing) existing.remove()
+                mounted = false
+                return
+            }
+
+            // 1. Scrape
             try {
                 const data = scrapePage()
                 if (data.title) {
-                    setJobData(data)
-                    data.debug_info?.forEach(d => addLog(`[Scraper] ${d}`))
-                } else {
-                    addLog("Scraper: No Title Found yet")
+                    setJobData((prev: any) => {
+                        if (prev?.title !== data.title) return data
+                        return prev
+                    })
+                    if (data.title !== jobData?.title) {
+                        data.debug_info?.forEach(d => addLog(`[Scraper] ${d}`))
+                    }
                 }
-            } catch (e: any) {
-                addLog(`Scraper Error: ${e.message}`)
-            }
+            } catch (e) { }
 
-            // 2. Inject Button
+            // 2. Inject Inline Match Button
             if (document.getElementById("resumator-inline-container")) return
 
             setScanStatus("Scanning for Apply Button...")
 
-            // Naukri specific
+            // --- Strategy for Finding Apply Button (Reused logic) ---
+            let searchRoot: HTMLElement | Document = document
+            if (window.location.href.includes("linkedin.com")) {
+                const detailContainers = [
+                    ".jobs-search__job-details",
+                    ".job-view-layout",
+                    ".jobs-unified-top-card",
+                    "main.scaffold-layout__main"
+                ]
+
+                let foundContainer = false
+                for (const sel of detailContainers) {
+                    const el = document.querySelector(sel) as HTMLElement
+                    if (el && el.offsetHeight > 0) {
+                        searchRoot = el
+                        foundContainer = true
+                        break
+                    }
+                }
+            }
+
             const naukriSelectors = [
-                "#reg-apply-button",
-                "#login-apply-button",
-                ".apply-button",
-                "#apply-button",
-                ".styles_apply-button__w_88X",
-                ".styles_reg-apply-button__lUN1u"
+                "#reg-apply-button", "#login-apply-button", ".apply-button", "#apply-button",
+                "button.apply-button", "a.apply-button", "[id*='apply-button']", "[class*='apply-button']",
+                ".styles_apply-button__w_88X", ".styles_reg-apply-button__lUN1u"
             ]
-
             const generalSelectors = [
-                ".jobs-apply-button--top-card", // LinkedIn
-                ".jobs-s-apply",
-                "[id^='indeedApplyButton']",
-                "#jobsearch-ViewJobButtons-container"
+                ".jobs-apply-button--top-card", ".jobs-s-apply", "[id^='indeedApplyButton']", "#jobsearch-ViewJobButtons-container"
             ]
-
             const allSelectors = [...naukriSelectors, ...generalSelectors]
-
             let targetBtn: HTMLElement | null = null
 
-            // Try Selectors
             for (const sel of allSelectors) {
-                const el = document.querySelector(sel) as HTMLElement
+                const el = searchRoot.querySelector(sel) as HTMLElement
                 if (el) {
                     targetBtn = el
-                    addLog(`Found button via selector: ${sel}`)
                     break
                 }
             }
 
-            // Try Text Fallback
-            if (!targetBtn) {
-                const buttons = Array.from(document.querySelectorAll('button, a'))
-                addLog(`Checking ${buttons.length} buttons/links...`)
-
-                for (const btn of buttons) {
-                    const safeText = (btn.innerText || btn.textContent || "").toLowerCase()
-                    const ariaLabel = (btn.getAttribute('aria-label') || "").toLowerCase()
-
-                    const isApply = safeText.includes('apply') || ariaLabel.includes('apply') || safeText.includes('easy apply')
-                    const isNotLogin = !safeText.includes('login') || safeText.includes('login to apply')
-
-                    // Relaxed size check
-                    const rect = btn.getBoundingClientRect()
-                    const isVisible = rect.width > 20 && rect.height > 10
-
-                    if (isApply && isNotLogin && isVisible) {
-                        targetBtn = btn as HTMLElement
-                        addLog(`Found text match: "${safeText.slice(0, 20)}..." (${Math.round(rect.width)}x${Math.round(rect.height)})`)
+            // Fallback heuristics
+            if (!targetBtn && window.location.href.includes("linkedin.com")) {
+                const insightSelectors = [
+                    ".job-details-jobs-unified-top-card__job-insight",
+                    ".jobs-unified-top-card__job-insight",
+                    ".job-details-jobs-unified-top-card__job-insight-view-model-secondary",
+                    ".job-details-jobs-unified-top-card__subtitle-secondary-grouping"
+                ]
+                for (const sel of insightSelectors) {
+                    const elements = searchRoot.querySelectorAll(sel)
+                    if (elements.length > 0) {
+                        targetBtn = elements[elements.length - 1] as HTMLElement
                         break
+                    }
+                }
+            }
+
+            if (!targetBtn) {
+                // Text Heuristic
+                let buttonList: NodeListOf<Element> | HTMLElement[]
+                if (searchRoot === document) {
+                    buttonList = document.querySelectorAll('button, a, div[role="button"]')
+                } else {
+                    buttonList = (searchRoot as HTMLElement).querySelectorAll('button, a, div[role="button"]')
+                }
+                const buttons = Array.from(buttonList)
+                for (const btn of buttons) {
+                    const el = btn as HTMLElement
+                    if (window.location.href.includes("linkedin.com") && (
+                        el.closest('.jobs-search-results-list') || el.closest('.scaffold-layout__list')
+                    )) continue
+
+                    const safeText = (el.innerText || el.textContent || "").toLowerCase()
+                    if ((safeText.includes('apply') || safeText.includes('easy apply')) && !safeText.includes('login')) {
+                        const rect = el.getBoundingClientRect()
+                        if (rect.width > 20 && rect.height > 10) {
+                            targetBtn = el
+                            break
+                        }
                     }
                 }
             }
@@ -237,123 +276,87 @@ const ResumeOverlay = () => {
                 try {
                     const container = document.createElement("div")
                     container.id = "resumator-inline-container"
-                    container.style.cssText = "display:inline-block; margin-left:8px; vertical-align:middle; position:relative; z-index:2147483647;"
+                    container.style.cssText = "display:inline-block; vertical-align:middle; position:relative; z-index:999;"
 
-                    // Safer insertion
                     if (targetBtn.parentNode) {
                         targetBtn.parentNode.insertBefore(container, targetBtn.nextSibling)
                         const root = createRoot(container)
-                        root.render(<InlineButton onClick={() => setIsOpen(true)} />)
-                        addLog("Button Injected Successfully!")
+                        const platform = window.location.hostname
+
+                        // INJECT INLINE MATCH BUTTON
+                        root.render(<InlineMatchButton onClick={() => {
+                            setIsOpen(true)
+                            // Ideally trigger match auto-check here or focus
+                            handleMatchScore()
+                        }} platform={platform} />)
+
+                        addLog("Inline Match Button Injected")
                         setScanStatus("Injected")
-                    } else {
-                        addLog("Error: Target button has no parent?")
                     }
-                } catch (e: any) {
-                    addLog(`Injection Error: ${e.message}`)
-                }
-            } else {
-                setScanStatus("Retrying... Button not found")
+                } catch (e) { }
             }
         }
 
-        scanner()
-        const interval = setInterval(scanner, 2000) // Re-scan every 2s
+        scanAndInject()
+
+        let timeout: ReturnType<typeof setTimeout>
+        const observer = new MutationObserver(() => {
+            clearTimeout(timeout)
+            timeout = setTimeout(() => {
+                if (isContextValid()) scanAndInject()
+            }, 500)
+        })
+
+        observer.observe(document.body, { childList: true, subtree: true })
+
+        // URL Listener
+        let lastUrl = window.location.href
+        const urlObserver = setInterval(() => {
+            if (window.location.href !== lastUrl) {
+                lastUrl = window.location.href
+                addLog("URL Changed")
+                setJobData(null)
+                document.getElementById("resumator-inline-container")?.remove()
+                if (isContextValid()) scanAndInject()
+            }
+        }, 1000)
 
         return () => {
             mounted = false
-            clearInterval(interval)
+            observer.disconnect()
+            clearInterval(urlObserver)
+            clearTimeout(timeout)
         }
+
     }, [])
 
     return (
         <div className="resumator-root">
+            {toast && <Toast message={toast.msg} type={toast.type} onClose={() => setToast(null)} />}
+
             <DebugOverlay logs={debugLogs} jobData={jobData} status={scanStatus} />
 
-            {/* Main Floating Button (Still kept as backup) */}
-            <div className="fixed bottom-5 right-5 z-50 font-sans">
-                {!isOpen ? (
-                    <button
-                        onClick={() => setIsOpen(true)}
-                        className="bg-blue-600 hover:bg-blue-700 text-white p-4 rounded-full shadow-2xl flex items-center gap-2 transition-all hover:scale-105"
-                    >
-                        <span className="text-xl">📄</span>
-                        <span className="font-bold">Generate Resume</span>
-                    </button>
-                ) : (
-                    <div className="bg-white rounded-xl shadow-2xl w-[350px] overflow-hidden border border-gray-200 flex flex-col max-h-[600px]">
-                        {/* Header */}
-                        <div className="bg-gradient-to-r from-blue-600 to-indigo-700 p-4 text-white flex justify-between items-center">
-                            <h2 className="font-bold">Resumator AI</h2>
-                            <button onClick={() => setIsOpen(false)} className="text-white/80 hover:text-white">✕</button>
-                        </div>
+            {/* Always Visible Floating Action Button for Generation */}
+            <FloatingGenerateButton
+                visible={!isOpen}
+                onClick={() => setIsOpen(true)}
+            />
 
-                        {/* Content */}
-                        <div className="p-4 overflow-y-auto flex-1 space-y-4">
-                            <div className="bg-green-50 p-3 rounded border border-green-200">
-                                <p className="text-xs font-bold text-green-800 uppercase">Detected Job</p>
-                                <p className="font-bold text-gray-800 text-sm">{jobData?.title || "Detecting..."}</p>
-                                <p className="text-xs text-gray-600">{jobData?.company || ""}</p>
-                            </div>
-
-                            <div className="space-y-2">
-                                <p className="text-xs font-bold text-gray-400 uppercase">Your Details</p>
-                                <input className="w-full p-2 border rounded text-sm" placeholder="Full Name" value={userData.full_name} onChange={e => setUserData({ ...userData, full_name: e.target.value })} />
-                                <textarea className="w-full p-2 border rounded text-sm" rows={3} placeholder="Skills..." value={userData.skills} onChange={e => setUserData({ ...userData, skills: e.target.value })} />
-                            </div>
-                        </div>
-
-                        {/* Footer */}
-                        <div className="p-4 bg-gray-50 border-t space-y-3">
-                            <div className="flex gap-2">
-                                <button
-                                    onClick={async () => {
-                                        if (!jobData) return
-                                        setLoading(true)
-                                        setGenStatus("Calculating Match...")
-                                        try {
-                                            const payload = {
-                                                user_data: {
-                                                    ...userData,
-                                                    skills: userData.skills.split(",").map((s: string) => s.trim())
-                                                },
-                                                job_description: jobData.description
-                                            }
-
-                                            const res = await fetch("http://localhost:8000/api/match", {
-                                                method: "POST",
-                                                headers: { "Content-Type": "application/json" },
-                                                body: JSON.stringify(payload)
-                                            })
-
-                                            if (!res.ok) throw new Error("Backend error")
-                                            const data = await res.json()
-
-                                            // Show result (you might want a better UI for this)
-                                            alert(`Match Score: ${data.score}%\nReasoning: ${data.reasoning}`)
-                                            setGenStatus(`Match Score: ${data.score}%`)
-                                        } catch (e: any) {
-                                            setGenStatus("Error: " + e.message)
-                                        } finally {
-                                            setLoading(false)
-                                        }
-                                    }}
-                                    disabled={loading}
-                                    className="flex-1 bg-indigo-600 text-white py-2 rounded-lg font-bold hover:bg-indigo-700 disabled:bg-gray-400 text-sm"
-                                >
-                                    Check Match
-                                </button>
-                                <button onClick={handleGenerate} disabled={loading} className="flex-1 bg-blue-600 text-white py-2 rounded-lg font-bold text-sm">
-                                    {loading ? "Working..." : "Generate PDF"}
-                                </button>
-                            </div>
-                            {genStatus && <p className="mt-2 text-center text-xs text-gray-600">{genStatus}</p>}
-                        </div>
-                    </div>
-                )}
-            </div>
+            {/* Main Modal */}
+            <ResumeModal
+                isOpen={isOpen}
+                onClose={() => setIsOpen(false)}
+                jobData={jobData}
+                userData={userData}
+                setUserData={setUserData}
+                loading={loading}
+                matchResult={matchResult}
+                onGenerate={handleGenerate}
+                onCheckMatch={handleMatchScore}
+                genStatus={genStatus}
+            />
         </div>
     )
 }
 
-export default ResumeOverlay
+export default ResumatorApp
