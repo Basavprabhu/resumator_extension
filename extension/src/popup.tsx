@@ -1,44 +1,66 @@
 import { useState, useEffect } from "react"
 import { scrapePage } from "./scraper"
 import "./style.css"
+import { auth } from "./firebase"
+import { onAuthStateChanged, User } from "firebase/auth"
+import { signInWithGoogle, getUserProfile, logout, type UserProfile } from "./services/authService"
+import Onboarding from "./components/Onboarding"
+
+type AuthState = "LOADING" | "UNAUTHENTICATED" | "ONBOARDING" | "AUTHENTICATED"
 
 function IndexPopup() {
+    // Auth State
+    const [authState, setAuthState] = useState<AuthState>("LOADING")
+    const [user, setUser] = useState<User | null>(null)
+    const [userProfile, setUserProfile] = useState<UserProfile | null>(null)
+
+    // Main App State
     const [activeTab, setActiveTab] = useState<"auto" | "manual">("auto")
     const [jobData, setJobData] = useState<any>(null)
-    const [userData, setUserData] = useState({
-        full_name: "",
-        contact_info: "",
-        skills: "",
-        experience: ""
-    })
     const [manualJob, setManualJob] = useState({ title: "", description: "" })
     const [loading, setLoading] = useState(false)
     const [status, setStatus] = useState("")
     const [showDebug, setShowDebug] = useState(false)
 
     useEffect(() => {
-        // Load User Data
-        chrome.storage.local.get("userData", (res) => {
-            if (res.userData) setUserData(res.userData)
+        const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+            setUser(currentUser)
+            if (currentUser) {
+                // Check if profile exists
+                try {
+                    const profile = await getUserProfile(currentUser.uid)
+                    if (profile) {
+                        setUserProfile(profile)
+                        setAuthState("AUTHENTICATED")
+                    } else {
+                        setAuthState("ONBOARDING")
+                    }
+                } catch (e) {
+                    console.error("Profile check failed", e)
+                    // Fallback or retry? valid user but DB error.
+                    setAuthState("ONBOARDING") // Assume no profile if error or treat as new
+                }
+            } else {
+                setAuthState("UNAUTHENTICATED")
+            }
         })
+        return () => unsubscribe()
+    }, [])
 
-        // Active Scraping with Smart Regex
+    useEffect(() => {
+        if (authState !== "AUTHENTICATED") return
+
+        // Active Scraping Logic (Only run when authenticated)
         chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
             const currentTab = tabs[0]
             if (currentTab?.id && currentTab.url) {
                 const url = currentTab.url
-
-                // Smart Regex Patterns
-                // LinkedIn: Matches /jobs/view/ OR any URL with currentJobId parameter
                 const linkedinJobRegex = /linkedin\.com\/.*(?:jobs\/view\/|[?&]currentJobId=)/
-                // Indeed: Matches /viewjob, /jobs, OR any URL with vjk parameter
                 const indeedJobRegex = /indeed\.com\/.*(?:viewjob|jobs|cmp\/.*\/jobs|[?&]vjk=)/
-
                 const isSupported = linkedinJobRegex.test(url) || indeedJobRegex.test(url)
 
                 if (!isSupported) {
-                    console.log("Not a target job page, skipping scrape.")
-                    setStatus("Not a recognized job page. Switched to Manual Mode.")
+                    // console.log("Not a target job page")
                     setActiveTab("manual")
                     return
                 }
@@ -60,12 +82,12 @@ function IndexPopup() {
                 }
             }
         })
-    }, [])
+    }, [authState])
 
     const handleGenerate = async () => {
+        if (!userProfile) return
         setLoading(true)
         setStatus("Generating resume...")
-        chrome.storage.local.set({ userData })
 
         try {
             const finalJobDesc = activeTab === "auto" ? jobData?.description : manualJob.description
@@ -73,10 +95,20 @@ function IndexPopup() {
 
             if (!finalJobDesc) throw new Error("Job Description is missing!")
 
+            // Backward compatibility: Concatenate contact details for backend
+            const contactString = [
+                userProfile.contact_details?.email,
+                userProfile.contact_details?.phone,
+                userProfile.contact_details?.linkedin
+            ].filter(Boolean).join(" | ");
+
             const payload = {
                 user_data: {
-                    ...userData,
-                    skills: userData.skills.split(",").map(s => s.trim())
+                    full_name: userProfile.full_name,
+                    contact_info: contactString,
+                    skills: userProfile.skills, // Already array
+                    experience: userProfile.experience,
+                    preferences: userProfile.preferences
                 },
                 job_description: finalJobDesc
             }
@@ -106,14 +138,69 @@ function IndexPopup() {
         }
     }
 
+    const handleLogin = async () => {
+        try {
+            await signInWithGoogle()
+            // State update handled by onAuthStateChanged
+        } catch (e: any) {
+            setStatus("Login Failed: " + e.message)
+        }
+    }
+
+    const handleOnboardingComplete = (profile: UserProfile) => {
+        setUserProfile(profile)
+        setAuthState("AUTHENTICATED")
+    }
+
+    // --- RENDER ---
+
+    if (authState === "LOADING") {
+        return (
+            <div className="w-[400px] bg-slate-50 min-h-[550px] flex items-center justify-center">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+            </div>
+        )
+    }
+
+    if (authState === "UNAUTHENTICATED") {
+        return (
+            <div className="w-[400px] bg-slate-50 min-h-[550px] flex flex-col items-center justify-center p-8">
+                <div className="mb-6 text-center">
+                    <h1 className="text-3xl font-bold text-blue-700 mb-2">Resumator</h1>
+                    <p className="text-gray-500">AI-Powered Resume Generator</p>
+                </div>
+                <button
+                    onClick={handleLogin}
+                    className="flex items-center gap-3 bg-white border border-gray-300 px-6 py-3 rounded-lg shadow-sm hover:bg-gray-50 transition w-full justify-center font-medium text-gray-700"
+                >
+                    <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-6 h-6" alt="Google" />
+                    Sign in with Google
+                </button>
+                {status && <p className="mt-4 text-xs text-red-500 text-center">{status}</p>}
+            </div>
+        )
+    }
+
+    if (authState === "ONBOARDING" && user) {
+        return (
+            <div className="w-[400px] bg-slate-50 min-h-[550px] flex flex-col">
+                <Onboarding user={user} onComplete={handleOnboardingComplete} />
+            </div>
+        )
+    }
+
+    // AUTHENTICATED STATE (Main App)
     return (
         <div className="w-[400px] bg-slate-50 min-h-[550px] font-sans text-slate-800 flex flex-col">
             {/* Header */}
-            <div className="bg-gradient-to-r from-blue-600 to-indigo-700 p-4 text-white shadow-md shrink-0">
-                <div className="flex justify-between items-center">
-                    <h1 className="text-xl font-bold tracking-tight">Resumator AI</h1>
+            <div className="bg-gradient-to-r from-blue-600 to-indigo-700 p-4 text-white shadow-md shrink-0 flex justify-between items-center">
+                <h1 className="text-xl font-bold tracking-tight">Resumator AI</h1>
+                <div className="flex gap-2">
                     <button onClick={() => setShowDebug(!showDebug)} className="text-xs bg-white/20 px-2 py-1 rounded hover:bg-white/30 transition">
                         {showDebug ? "Hide Debug" : "Debug"}
+                    </button>
+                    <button onClick={logout} className="text-xs bg-red-500/80 px-2 py-1 rounded hover:bg-red-500 transition">
+                        Logout
                     </button>
                 </div>
             </div>
@@ -149,7 +236,7 @@ function IndexPopup() {
                             </div>
                         ) : (
                             <div className="bg-amber-50 p-4 rounded-lg border border-amber-200 text-amber-800 text-sm">
-                                <p className="font-semibold">⚠️ No Job Detected</p>
+                                <p className="font-semibold">Ag No Job Detected</p>
                                 <p className="mt-1">We couldn't read the job details automatically.</p>
                                 <button onClick={() => setActiveTab("manual")} className="mt-2 text-blue-600 underline font-semibold">
                                     Switch to Manual Mode
@@ -159,11 +246,11 @@ function IndexPopup() {
                         {showDebug && (
                             <div className="bg-gray-900 text-green-400 p-3 rounded text-xs font-mono overflow-auto max-h-32">
                                 <p className="font-bold border-b border-gray-700 mb-1">Debug Logs:</p>
-                                {jobData.debug_info?.map((log: string, i: number) => (
+                                {jobData?.debug_info?.map((log: string, i: number) => (
                                     <div key={i}>{log}</div>
                                 )) || "No logs"}
                                 <div className="mt-2 border-t border-gray-700 pt-1">
-                                    <pre>{JSON.stringify({ title: jobData.title, company: jobData.company, desc_len: jobData.description?.length }, null, 2)}</pre>
+                                    <pre>{JSON.stringify({ title: jobData?.title, company: jobData?.company, desc_len: jobData?.description?.length }, null, 2)}</pre>
                                 </div>
                             </div>
                         )}
@@ -189,37 +276,17 @@ function IndexPopup() {
                     </div>
                 )}
 
-                {/* User Details Form */}
-                <div className="space-y-3 pt-2 border-t">
-                    <p className="text-xs font-bold text-gray-400 uppercase">Your Profile</p>
-                    <div className="grid grid-cols-2 gap-2">
-                        <input
-                            className="w-full p-2 border rounded text-sm"
-                            placeholder="Full Name"
-                            value={userData.full_name}
-                            onChange={e => setUserData({ ...userData, full_name: e.target.value })}
-                        />
-                        <input
-                            className="w-full p-2 border rounded text-sm"
-                            placeholder="Contact Info"
-                            value={userData.contact_info}
-                            onChange={e => setUserData({ ...userData, contact_info: e.target.value })}
-                        />
+                {/* User Details Form (READ ONLY / EDIT LINK) */}
+                <div className="space-y-3 pt-2 border-t text-sm text-gray-600">
+                    <div className="flex justify-between items-center">
+                        <p className="text-xs font-bold text-gray-400 uppercase">Your Profile</p>
+                        <button className="text-blue-600 text-xs hover:underline" onClick={() => setAuthState("ONBOARDING")}>Edit Profile</button>
                     </div>
-                    <textarea
-                        className="w-full p-2 border rounded text-sm"
-                        rows={2}
-                        placeholder="Skills (React, Python...)"
-                        value={userData.skills}
-                        onChange={e => setUserData({ ...userData, skills: e.target.value })}
-                    />
-                    <textarea
-                        className="w-full p-2 border rounded text-sm"
-                        rows={3}
-                        placeholder="Experience Summary..."
-                        value={userData.experience}
-                        onChange={e => setUserData({ ...userData, experience: e.target.value })}
-                    />
+                    <div className="bg-white p-3 rounded border space-y-2">
+                        <p><strong>Name:</strong> {userProfile?.full_name}</p>
+                        <p><strong>Email:</strong> {userProfile?.contact_details?.email}</p>
+                        <p><strong>Exp:</strong> {userProfile?.experience.substring(0, 50)}...</p>
+                    </div>
                 </div>
             </div>
 

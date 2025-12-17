@@ -11,6 +11,24 @@ export const scrapePage = () => {
 
     const log = (msg: string) => jobData.debug_info.push(msg)
 
+    // Helper: Clean text to remove scripts, styles, and garbage
+    const cleanText = (element: Element | null): string => {
+        if (!element) return ""
+        try {
+            const clone = element.cloneNode(true) as HTMLElement
+            const badTags = ['script', 'style', 'noscript', 'iframe', 'object', 'embed']
+            badTags.forEach(tag => {
+                const nodes = clone.querySelectorAll(tag)
+                nodes.forEach(n => n.remove())
+            })
+            // Remove huge words that are likely tokens
+            let text = clone.innerText || clone.textContent || ""
+            return text.slice(0, 15000).trim() // Hard limit
+        } catch (e) {
+            return ""
+        }
+    }
+
     try {
         // LinkedIn
         if (url.includes("linkedin.com")) {
@@ -59,14 +77,14 @@ export const scrapePage = () => {
 
             // Description
             const descSelectors = [
-                "#job-details",
                 ".jobs-description__content",
                 ".jobs-box__html-content",
                 ".jobs-description-content__text",
+                // Public job view
+                ".description__text",
                 "#job-details span",
-                ".description__text", // Public job view
-                // Generic: Look for the container that has "About the job"
-                "div.jobs-description"
+                // Fallback (riskier, but cleaned now)
+                "#job-details"
             ]
 
             // Heuristic: If we can't find by class, look for the largest text block containing "About the job"
@@ -74,18 +92,30 @@ export const scrapePage = () => {
                 const allDivs = document.querySelectorAll("div")
                 for (const div of Array.from(allDivs)) {
                     if (div.textContent?.includes("About the job") && div.textContent.length > 200) {
-                        jobData.description = div.textContent.trim()
-                        log("Found desc via heuristic 'About the job'")
-                        break
+                        // Clean it
+                        let t = cleanText(div)
+                        if (!t.includes('"$type"')) {
+                            jobData.description = t
+                            log("Found desc via heuristic 'About the job'")
+                            break
+                        }
                     }
                 }
             }
 
             for (const sel of descSelectors) {
                 const el = document.querySelector(sel) as HTMLElement
-                if (el && el.innerText?.trim()) {
-                    let text = el.innerText.trim()
+                if (el) {
+                    let text = cleanText(el)
                     text = text.replace(/^About the job\s*/i, "")
+
+                    // Critical Check: Is this JSON garbage?
+                    // The user log showed: "intBinding":{"$type":"proto.sdui...
+                    if (text.includes('"$type":"proto.sdui') || text.includes('{"$type"')) {
+                        log(`Skipping ${sel} - detected JSON garbage`)
+                        continue
+                    }
+
                     if (text.length > 50) { // Threshold to avoid empty containers
                         jobData.description = text
                         log(`Found desc with ${sel} (len: ${text.length})`)

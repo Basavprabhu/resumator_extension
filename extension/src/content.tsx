@@ -36,9 +36,14 @@ const ResumatorApp = () => {
     const [jobData, setJobData] = useState<any>(null)
     const [userData, setUserData] = useState({
         full_name: "",
-        contact_info: "",
+        email: "",
+        phone: "",
+        linkedin: "",
         skills: "",
-        experience: ""
+        experience: "",
+        location: "",
+        job_type: "any",
+        notice_period: ""
     })
     const [loading, setLoading] = useState(false)
     const [matchResult, setMatchResult] = useState<{ score: number, reasoning: string } | null>(null)
@@ -48,6 +53,47 @@ const ResumatorApp = () => {
     // Debug State
     const [debugLogs, setDebugLogs] = useState<DebugLog[]>([])
     const [scanStatus, setScanStatus] = useState("Initializing...")
+    const [isAuth, setIsAuth] = useState(false)
+
+    // Auth & Storage Listener
+    useEffect(() => {
+        const checkAuth = () => {
+            chrome.storage.local.get(["authState"], (res) => {
+                setIsAuth(res.authState === "AUTHENTICATED")
+            })
+        }
+        checkAuth()
+
+        const listener = (changes: any, area: string) => {
+            if (area === "local" && changes.authState) {
+                checkAuth()
+            }
+        }
+        chrome.storage.onChanged.addListener(listener)
+        return () => chrome.storage.onChanged.removeListener(listener)
+    }, [])
+
+    // Sync local state with storage when modal opens
+    useEffect(() => {
+        if (isOpen) {
+            chrome.storage.local.get("userProfile", (res) => {
+                if (res.userProfile) {
+                    const p = res.userProfile
+                    setUserData({
+                        full_name: p.full_name || "",
+                        email: p.contact_details?.email || "",
+                        phone: p.contact_details?.phone || "",
+                        linkedin: p.contact_details?.linkedin || "",
+                        skills: Array.isArray(p.skills) ? p.skills.join(", ") : (p.skills || ""),
+                        experience: p.experience || "",
+                        location: p.preferences?.location || "",
+                        job_type: p.preferences?.job_type || "any",
+                        notice_period: p.preferences?.notice_period || ""
+                    })
+                }
+            })
+        }
+    }, [isOpen])
 
     const addLog = (msg: string) => {
         console.log(`[Resumator] ${msg}`)
@@ -69,7 +115,84 @@ const ResumatorApp = () => {
 
     // --- Actions ---
 
+    const handleLogin = async () => {
+        try {
+            const res = await chrome.runtime.sendMessage({ action: "LOGIN" });
+            if (!res.success) {
+                showToast("Login failed: " + res.error, "error");
+            } else {
+                // Auth state listener will handle the rest
+                showToast("Logged in successfully!", "success");
+            }
+        } catch (e: any) {
+            showToast("Login error: " + e.message, "error");
+        }
+    }
+
+    const handleLogout = async () => {
+        try {
+            const res = await chrome.runtime.sendMessage({ action: "LOGOUT" });
+            if (!res.success) {
+                showToast("Logout failed: " + res.error, "error");
+            } else {
+                showToast("Logged out successfully.", "success");
+                // Auth state listener will handle UI update
+            }
+        } catch (e: any) {
+            showToast("Logout error: " + e.message, "error");
+        }
+    }
+
+    const handleSaveProfile = async (newData: any) => {
+        try {
+            // Fetch current ID if needed (though likely we just overwrite based on logic)
+            const stored = await chrome.storage.local.get("userProfile");
+            const currentProfile = stored.userProfile || {};
+
+            const finalData = {
+                ...currentProfile,
+                full_name: newData.full_name,
+                experience: newData.experience,
+                skills: typeof newData.skills === 'string'
+                    ? newData.skills.split(",").map((s: string) => s.trim()).filter((s: string) => s)
+                    : newData.skills,
+                contact_details: {
+                    email: newData.email,
+                    phone: newData.phone,
+                    linkedin: newData.linkedin
+                },
+                preferences: {
+                    location: newData.location,
+                    job_type: newData.job_type,
+                    notice_period: newData.notice_period
+                }
+            };
+
+            const res = await chrome.runtime.sendMessage({
+                action: "SAVE_PROFILE",
+                payload: {
+                    uid: currentProfile.uid, // Ensure UID is present if it exists
+                    data: finalData
+                }
+            });
+
+            if (!res.success) throw new Error(res.error);
+
+            showToast("Profile updated!", "success");
+            // Local storage update is handled by background script logic usually, 
+            // but we can also update local state if we want immediate reflection before storage event
+
+        } catch (e: any) {
+            showToast("Failed to save: " + e.message, "error");
+            throw e; // Propagate to modal to stop loading state
+        }
+    }
+
     const handleGenerate = async () => {
+        if (!isAuth) {
+            setIsOpen(true); // Open modal to show login prompt
+            return
+        }
         if (!jobData) return
 
         if (!isContextValid()) {
@@ -80,10 +203,38 @@ const ResumatorApp = () => {
         setLoading(true)
         setGenStatus("Generating...")
         try {
+            // Fetch latest user data from storage to ensure we have it
+            const stored = await chrome.storage.local.get("userProfile")
+            // Use stored profile if avail, else fallback to current local state
+            // Normalize data because state is flat but storage is nested
+            const p = stored.userProfile || {}
+
+            // Construct data from either source, preferring storage (p) but falling back to state (userData)
+            const email = p.contact_details?.email || userData.email
+            const phone = p.contact_details?.phone || userData.phone
+            const linkedin = p.contact_details?.linkedin || userData.linkedin
+            const fullName = p.full_name || userData.full_name
+            const experience = p.experience || userData.experience
+
+            // Skills: storage is array, state is string
+            const skills = p.skills || (userData.skills ? userData.skills.split(",").map((s: string) => s.trim()) : [])
+
+            // Preferences
+            const preferences = p.preferences || {
+                location: userData.location,
+                job_type: userData.job_type,
+                notice_period: userData.notice_period
+            }
+
+            const contactString = [email, phone, linkedin].filter(Boolean).join(" | ");
+
             const payload = {
                 user_data: {
-                    ...userData,
-                    skills: userData.skills.split(",").map((s: string) => s.trim())
+                    full_name: fullName,
+                    contact_info: contactString,
+                    skills: skills,
+                    experience: experience,
+                    preferences: preferences
                 },
                 job_description: jobData.description
             }
@@ -121,6 +272,10 @@ const ResumatorApp = () => {
     }
 
     const handleMatchScore = async () => {
+        if (!isAuth) {
+            setIsOpen(true); // Open modal to show login prompt
+            return
+        }
         if (!jobData) return
         if (!isContextValid()) {
             showToast("Extension context invalidated. Please refresh.", "error")
@@ -130,10 +285,28 @@ const ResumatorApp = () => {
         setLoading(true)
         setMatchResult(null)
         try {
+            // Fetch latest user data from storage
+            const stored = await chrome.storage.local.get("userProfile")
+            const p = stored.userProfile || {}
+
+            // Construct data from either source, preferring storage (p) but falling back to state (userData)
+            const email = p.contact_details?.email || userData.email
+            const phone = p.contact_details?.phone || userData.phone
+            const linkedin = p.contact_details?.linkedin || userData.linkedin
+            const fullName = p.full_name || userData.full_name
+            const experience = p.experience || userData.experience
+
+            // Skills: storage is array, state is string
+            const skills = p.skills || (userData.skills ? userData.skills.split(",").map((s: string) => s.trim()) : [])
+
+            const contactString = [email, phone, linkedin].filter(Boolean).join(" | ");
+
             const payload = {
                 user_data: {
-                    ...userData,
-                    skills: userData.skills.split(",").map((s: string) => s.trim())
+                    full_name: fullName,
+                    contact_info: contactString,
+                    skills: skills,
+                    experience: experience
                 },
                 job_description: jobData.description
             }
@@ -354,6 +527,10 @@ const ResumatorApp = () => {
                 onGenerate={handleGenerate}
                 onCheckMatch={handleMatchScore}
                 genStatus={genStatus}
+                isAuth={isAuth}
+                onLogin={handleLogin}
+                onLogout={handleLogout}
+                onSaveProfile={handleSaveProfile}
             />
         </div>
     )

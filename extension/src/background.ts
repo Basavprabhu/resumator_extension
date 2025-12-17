@@ -1,4 +1,4 @@
-import { scrapePage } from "./scraper"
+import { signInWithGoogle, getUserProfile, saveUserProfile, logout } from "./services/authService"
 
 // Listen for tab updates to update the badge
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
@@ -74,5 +74,50 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 sendResponse({ success: false, error: err.message })
             })
         return true // Keep channel open
+    }
+
+    if (request.action === "LOGIN") {
+        (async () => {
+            try {
+                const user = await signInWithGoogle();
+                const profile = await getUserProfile(user.uid);
+
+                // If profile doesn't exist, we might want to create a skeleton or return null
+                // The Popup will handle onboarding, but if they login from here, they might need onboarding.
+                // For now, let's return what we have.
+
+                sendResponse({ success: true, user, profile });
+            } catch (error: any) {
+                console.error("Login error in background:", error);
+                sendResponse({ success: false, error: error.message || "Login failed" });
+            }
+        })();
+        return true;
+    }
+
+    if (request.action === "LOGOUT") {
+        (async () => {
+            try {
+                await logout();
+                sendResponse({ success: true });
+            } catch (error: any) {
+                sendResponse({ success: false, error: error.message });
+            }
+        })();
+        return true;
+    }
+
+    if (request.action === "SAVE_PROFILE") {
+        (async () => {
+            try {
+                const { uid, data } = request.payload;
+                await saveUserProfile(uid, data);
+                sendResponse({ success: true });
+            } catch (error: any) {
+                console.error("Save profile error in background:", error);
+                sendResponse({ success: false, error: error.message || "Failed to save profile" });
+            }
+        })();
+        return true;
     }
 })

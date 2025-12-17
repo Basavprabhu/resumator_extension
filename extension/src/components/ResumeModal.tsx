@@ -12,6 +12,10 @@ interface ResumeModalProps {
     onGenerate: () => void
     onCheckMatch: () => void
     genStatus?: string
+    isAuth: boolean
+    onLogin: () => void
+    onLogout: () => void
+    onSaveProfile: (data: any) => Promise<void>
 }
 
 const ResumeModal = ({
@@ -24,10 +28,68 @@ const ResumeModal = ({
     matchResult,
     onGenerate,
     onCheckMatch,
-    genStatus
+    genStatus,
+    isAuth,
+    onLogin,
+    onLogout,
+    onSaveProfile
 }: ResumeModalProps) => {
+    const [isEditing, setIsEditing] = React.useState(false);
+    const [saveLoading, setSaveLoading] = React.useState(false);
+
+    // Reset edit mode when modal opens/closes
+    React.useEffect(() => {
+        if (isOpen) setIsEditing(true); // Always open in edit mode
+        else setIsEditing(false);
+    }, [isOpen]);
+
+    const handleSave = async () => {
+        setSaveLoading(true);
+        try {
+            await onSaveProfile(userData);
+            setIsEditing(false);
+        } catch (error) {
+            console.error(error);
+        } finally {
+            setSaveLoading(false);
+        }
+    };
 
     if (!isOpen) return null
+
+    // Login View
+    if (!isAuth) {
+        return (
+            <div className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-black/50 backdrop-blur-sm animate-fade-in font-sans">
+                <ErrorBoundary>
+                    <div className="bg-white rounded-xl shadow-2xl w-[400px] overflow-hidden border border-gray-200 flex flex-col animate-scale-up">
+                        <div className="bg-gradient-to-r from-blue-600 to-indigo-700 p-5 text-white flex justify-between items-center shadow-md">
+                            <h2 className="font-bold text-lg leading-tight">Resumator AI</h2>
+                            <button onClick={onClose} className="text-white/70 hover:text-white rounded-full p-1">✕</button>
+                        </div>
+
+                        <div className="p-8 flex flex-col items-center text-center space-y-6">
+                            <div className="bg-blue-50 p-4 rounded-full">
+                                <span className="text-4xl">🔒</span>
+                            </div>
+                            <div>
+                                <h3 className="text-xl font-bold text-gray-800 mb-2">Authentication Required</h3>
+                                <p className="text-gray-500 text-sm">Please sign in to access the Resume Generator and Match Score features.</p>
+                            </div>
+
+                            <button
+                                onClick={onLogin}
+                                className="w-full flex items-center justify-center gap-3 bg-white border border-gray-300 px-6 py-3 rounded-lg shadow-sm hover:bg-gray-50 transition font-medium text-gray-700"
+                            >
+                                <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-6 h-6" alt="Google" />
+                                Sign in with Google
+                            </button>
+                        </div>
+                    </div>
+                </ErrorBoundary>
+            </div>
+        )
+    }
 
     return (
         <div className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-black/50 backdrop-blur-sm animate-fade-in font-sans">
@@ -44,12 +106,23 @@ const ResumeModal = ({
                                 <p className="text-xs text-blue-100/80">Job Application Assistant</p>
                             </div>
                         </div>
-                        <button
-                            onClick={onClose}
-                            className="text-white/70 hover:text-white hover:bg-white/10 rounded-full p-2 h-8 w-8 flex items-center justify-center transition-colors"
-                        >
-                            ✕
-                        </button>
+                        <div className="flex items-center gap-2">
+                            <button
+                                onClick={onLogout}
+                                title="Logout"
+                                className="text-white/70 hover:text-white hover:bg-white/10 rounded-full p-2 h-8 w-8 flex items-center justify-center transition-colors text-xs"
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-4 h-4">
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15M12 9l-3 3m0 0l3 3m-3-3h12.75" />
+                                </svg>
+                            </button>
+                            <button
+                                onClick={onClose}
+                                className="text-white/70 hover:text-white hover:bg-white/10 rounded-full p-2 h-8 w-8 flex items-center justify-center transition-colors"
+                            >
+                                ✕
+                            </button>
+                        </div>
                     </div>
 
                     {/* Content */}
@@ -72,32 +145,156 @@ const ResumeModal = ({
 
                         {/* User Input Section */}
                         <div className="space-y-4">
-                            <div className="flex justify-between items-baseline">
+                            <div className="flex justify-between items-center">
                                 <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Your Profile</p>
+                                {!isEditing ? (
+                                    <button
+                                        onClick={() => setIsEditing(true)}
+                                        className="text-xs text-blue-600 hover:text-blue-800 font-semibold flex items-center gap-1"
+                                    >
+                                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3 h-3">
+                                            <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487zm0 0L19.5 7.125" />
+                                        </svg>
+                                        Edit Details
+                                    </button>
+                                ) : (
+                                    <div className="flex gap-2">
+                                        <button
+                                            onClick={() => setIsEditing(false)}
+                                            className="text-xs text-gray-500 hover:text-gray-700"
+                                            disabled={saveLoading}
+                                        >
+                                            Cancel
+                                        </button>
+                                        <button
+                                            onClick={handleSave}
+                                            className="text-xs bg-blue-600 text-white px-2 py-1 rounded hover:bg-blue-700 disabled:opacity-50"
+                                            disabled={saveLoading}
+                                        >
+                                            {saveLoading ? "Saving..." : "Save"}
+                                        </button>
+                                    </div>
+                                )}
                             </div>
 
+                            {/* Contact Details Section */}
                             <div className="space-y-3">
+                                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest border-b border-gray-100 pb-1">Contact Information</p>
+                                <div className="grid grid-cols-2 gap-3">
+                                    <div className="relative">
+                                        <span className="absolute left-3 top-3 text-gray-400 text-xs">📧</span>
+                                        <input
+                                            className={`w-full pl-9 p-2.5 bg-white border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all placeholder:text-gray-400 ${isEditing ? 'border-blue-300' : 'border-gray-200 bg-gray-50 text-gray-600'}`}
+                                            placeholder="Email"
+                                            value={userData.email || ""}
+                                            onChange={e => setUserData({ ...userData, email: e.target.value })}
+                                            disabled={!isEditing}
+                                        />
+                                    </div>
+                                    <div className="relative">
+                                        <span className="absolute left-3 top-3 text-gray-400 text-xs">📱</span>
+                                        <input
+                                            className={`w-full pl-9 p-2.5 bg-white border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all placeholder:text-gray-400 ${isEditing ? 'border-blue-300' : 'border-gray-200 bg-gray-50 text-gray-600'}`}
+                                            placeholder="Phone"
+                                            value={userData.phone || ""}
+                                            onChange={e => setUserData({ ...userData, phone: e.target.value })}
+                                            disabled={!isEditing}
+                                        />
+                                    </div>
+                                </div>
+                                <div className="relative">
+                                    <span className="absolute left-3 top-3 text-gray-400 text-xs">🔗</span>
+                                    <input
+                                        className={`w-full pl-9 p-2.5 bg-white border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all placeholder:text-gray-400 ${isEditing ? 'border-blue-300' : 'border-gray-200 bg-gray-50 text-gray-600'}`}
+                                        placeholder="LinkedIn URL"
+                                        value={userData.linkedin || ""}
+                                        onChange={e => setUserData({ ...userData, linkedin: e.target.value })}
+                                        disabled={!isEditing}
+                                    />
+                                </div>
+                            </div>
+
+                            {/* Preferences Section */}
+                            <div className="space-y-3">
+                                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest border-b border-gray-100 pb-1">Preferences</p>
+                                <div className="grid grid-cols-2 gap-3">
+                                    <div className="relative">
+                                        <span className="absolute left-3 top-3 text-gray-400 text-xs">📍</span>
+                                        <input
+                                            className={`w-full pl-9 p-2.5 bg-white border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all placeholder:text-gray-400 ${isEditing ? 'border-blue-300' : 'border-gray-200 bg-gray-50 text-gray-600'}`}
+                                            placeholder="Location"
+                                            value={userData.location || ""}
+                                            onChange={e => setUserData({ ...userData, location: e.target.value })}
+                                            disabled={!isEditing}
+                                        />
+                                    </div>
+                                    <div className="relative">
+                                        <span className="absolute left-3 top-3 text-gray-400 text-xs">⏳</span>
+                                        <input
+                                            className={`w-full pl-9 p-2.5 bg-white border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all placeholder:text-gray-400 ${isEditing ? 'border-blue-300' : 'border-gray-200 bg-gray-50 text-gray-600'}`}
+                                            placeholder="Notice Period"
+                                            value={userData.notice_period || ""}
+                                            onChange={e => setUserData({ ...userData, notice_period: e.target.value })}
+                                            disabled={!isEditing}
+                                        />
+                                    </div>
+                                </div>
+                                <div className="relative">
+                                    <span className="absolute left-3 top-3 text-gray-400 text-xs">💼</span>
+                                    <select
+                                        className={`w-full pl-9 p-2.5 bg-white border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all placeholder:text-gray-400 appearance-none ${isEditing ? 'border-blue-300' : 'border-gray-200 bg-gray-50 text-gray-600'}`}
+                                        value={userData.job_type || "any"}
+                                        onChange={e => setUserData({ ...userData, job_type: e.target.value })}
+                                        disabled={!isEditing}
+                                    >
+                                        <option value="any">Any Job Type</option>
+                                        <option value="remote">Remote</option>
+                                        <option value="hybrid">Hybrid</option>
+                                        <option value="onsite">On-site</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            {/* Professional Details Section */}
+                            <div className="space-y-3">
+                                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest border-b border-gray-100 pb-1">Professional Details</p>
                                 <div className="relative">
                                     <span className="absolute left-3 top-3 text-gray-400">👤</span>
                                     <input
-                                        className="w-full pl-10 p-3 bg-white border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all placeholder:text-gray-400"
+                                        className={`w-full pl-10 p-3 bg-white border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all placeholder:text-gray-400 ${isEditing ? 'border-blue-300' : 'border-gray-200 bg-gray-50 text-gray-600'}`}
                                         placeholder="Full Name"
-                                        value={userData.full_name}
+                                        value={userData.full_name || ""}
                                         onChange={e => setUserData({ ...userData, full_name: e.target.value })}
+                                        disabled={!isEditing}
                                     />
                                 </div>
 
                                 <div className="relative">
                                     <textarea
-                                        className="w-full p-3 bg-white border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all resize-y min-h-[100px] placeholder:text-gray-400"
+                                        className={`w-full p-3 bg-white border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all resize-y min-h-[100px] placeholder:text-gray-400 ${isEditing ? 'border-blue-300' : 'border-gray-200 bg-gray-50 text-gray-600'}`}
                                         rows={4}
-                                        placeholder="Paste your resume text, skills, or LinkedIn summary here..."
-                                        value={userData.skills}
-                                        onChange={e => setUserData({ ...userData, skills: e.target.value })}
+                                        placeholder="Experience Summary..."
+                                        value={userData.experience || ""}
+                                        onChange={e => setUserData({ ...userData, experience: e.target.value })}
+                                        disabled={!isEditing}
                                     />
-                                    <div className="absolute bottom-2 right-2 text-[10px] text-gray-300 pointer-events-none">
-                                        Skills & Exp
-                                    </div>
+                                    {!isEditing && (
+                                        <div className="absolute bottom-2 right-2 text-[10px] text-gray-400 pointer-events-none bg-white/80 px-1 rounded">
+                                            Read Only
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div className="relative">
+                                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Skills</p>
+                                    <textarea
+                                        className={`w-full p-3 bg-white border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all resize-y min-h-[60px] placeholder:text-gray-400 ${isEditing ? 'border-blue-300' : 'border-gray-200 bg-gray-50 text-gray-600'}`}
+                                        rows={2}
+                                        placeholder="React, TypeScript, etc..."
+                                        value={userData.skills || ""}
+                                        onChange={e => setUserData({ ...userData, skills: e.target.value })}
+                                        disabled={!isEditing}
+                                    />
                                 </div>
                             </div>
                         </div>
@@ -106,7 +303,7 @@ const ResumeModal = ({
                         {matchResult && (
                             <div className="bg-white p-5 rounded-xl border border-indigo-100 shadow-sm animate-slide-up relative overflow-hidden">
                                 <div className={`absolute top-0 left-0 w-1 h-full ${matchResult.score >= 70 ? 'bg-green-500' :
-                                        matchResult.score >= 40 ? 'bg-yellow-500' : 'bg-red-500'
+                                    matchResult.score >= 40 ? 'bg-yellow-500' : 'bg-red-500'
                                     }`}></div>
 
                                 <div className="flex items-center justify-between mb-4">
@@ -115,7 +312,7 @@ const ResumeModal = ({
                                         <h4 className="font-bold text-gray-700">Match Analysis</h4>
                                     </div>
                                     <div className={`flex items-baseline gap-1 ${matchResult.score >= 70 ? 'text-green-600' :
-                                            matchResult.score >= 40 ? 'text-yellow-600' : 'text-red-600'
+                                        matchResult.score >= 40 ? 'text-yellow-600' : 'text-red-600'
                                         }`}>
                                         <span className="text-3xl font-black">{matchResult.score}</span>
                                         <span className="text-sm font-bold">%</span>
@@ -125,7 +322,7 @@ const ResumeModal = ({
                                 <div className="w-full bg-gray-100 rounded-full h-2 mb-4 overflow-hidden">
                                     <div
                                         className={`h-full rounded-full transition-all duration-1000 ease-out ${matchResult.score >= 70 ? 'bg-green-500' :
-                                                matchResult.score >= 40 ? 'bg-yellow-400' : 'bg-red-500'
+                                            matchResult.score >= 40 ? 'bg-yellow-400' : 'bg-red-500'
                                             }`}
                                         style={{ width: `${matchResult.score}%` }}
                                     ></div>

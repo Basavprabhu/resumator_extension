@@ -1,9 +1,12 @@
 import google.generativeai as genai
 import os
 import json
+import logging
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 # Configure API Key
 if "API_KEY" in os.environ:
@@ -47,13 +50,19 @@ def generate_resume_content(user_data: dict, job_description: str) -> dict:
     """
     
     try:
+        logger.info("----- [GEMINI] Generate Resume Prompt -----")
+        logger.info(prompt)
+        
         response = model.generate_content(prompt)
+        
+        logger.info("----- [GEMINI] Generate Resume Raw Response -----")
+        logger.info(response.text)
+
         # Clean up code blocks if present
         text = response.text.replace("```json", "").replace("```", "").strip()
         return json.loads(text)
     except Exception as e:
-        print(f"Error generating resume: {e}")
-        # Return a fallback or re-raise
+        logger.error(f"[GEMINI] Error generating resume: {e}")
         return {"error": str(e)}
 
 def calculate_match_score(user_data: dict, job_description: str) -> dict:
@@ -83,9 +92,16 @@ def calculate_match_score(user_data: dict, job_description: str) -> dict:
     """
     
     try:
+        logger.info("----- [GEMINI] Match Score Prompt -----")
+        logger.info(prompt)
+        
         response = model.generate_content(prompt)
+        
+        logger.info("----- [GEMINI] Match Score Raw Response -----")
+        logger.info(response.text)
+        
         text = response.text.replace("```json", "").replace("```", "").strip()
         return json.loads(text)
     except Exception as e:
-        print(f"Error calculating match score: {e}")
+        logger.error(f"[GEMINI] Error calculating match score: {e}")
         return {"error": str(e)}
